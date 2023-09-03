@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ublox = { path = "../ublox/ublox" }
+ublox = { path = "ublox/ublox" }
 serialport = "3.3.0"
 clap = "2.33.3"
 chrono = "0.4.15"

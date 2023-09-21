@@ -1,9 +1,10 @@
 use chrono::prelude::*;
 use clap::{App, Arg};
-use std::convert::TryInto;
-use std::time::Duration;
+use std::{convert::TryInto, time::Duration};
 use ublox::*;
 
+const BAUD_RATES: [u32; 7] = [9600, 19200, 38400, 57600, 115200, 230400, 460800];
+const NUM_TRIES: usize = 3;
 struct Device {
     port: Box<dyn serialport::SerialPort>,
     parser: Parser<Vec<u8>>,
@@ -77,6 +78,28 @@ impl Device {
     }
 }
 
+fn try_baud_rate(port_name: &str, baud_rate: u32) -> Result<usize, Box<dyn std::error::Error>> {
+    let settings = serialport::SerialPortSettings {
+        baud_rate,
+        data_bits: serialport::DataBits::Eight,
+        flow_control: serialport::FlowControl::None,
+        parity: serialport::Parity::None,
+        stop_bits: serialport::StopBits::One,
+        timeout: std::time::Duration::from_millis(10000),
+    };
+
+    let mut max_byte_read = 0;
+    for _ in 0..NUM_TRIES {
+        let mut serial_port = serialport::open_with_settings(port_name, &settings)?;
+        let mut buffer = vec![0u8; 128];
+        let byte_read = serial_port.read(&mut buffer)?;
+        if byte_read > max_byte_read {
+            max_byte_read = byte_read;
+        }
+    }
+    Ok(max_byte_read)
+}
+
 fn main() {
     let matches = App::new("ublox CLI example program")
         .about("Demonstrates usage of the Rust ublox API")
@@ -97,15 +120,40 @@ fn main() {
         )
         .get_matches();
 
+    println!("Auto Selecting Baud Rate for GPS...");
     let port = matches.value_of("port").unwrap();
-    let baud: u32 = matches
-        .value_of("baud")
-        .unwrap_or("9600")
-        .parse()
-        .expect("Could not parse baudrate as an integer");
+    let port_name = port;
+    let mut max_byte_read = 0;
+    let mut correct_baud_rate = 0;
+    for &baud_rate in &BAUD_RATES {
+        match try_baud_rate(port_name, baud_rate) {
+            Ok(byte_read) => {
+                if byte_read > max_byte_read {
+                    max_byte_read = byte_read;
+                    correct_baud_rate = baud_rate;
+                }
+            }
+            Err(_) => {
+                println!("Baud rate {} is not working", baud_rate);
+                continue;
+            }
+        }
+    }
+    if correct_baud_rate == 0 {
+        correct_baud_rate = 38400;
+        println!(
+            "ERROR: No Suitable Baud Rate can be found, setting baud rate to {correct_baud_rate}"
+        );
+    } else if correct_baud_rate != 0 {
+        println!(
+            "Baud rate {} is working on port: {}",
+            correct_baud_rate, port_name
+        );
+        println!("Read {} out of 128 bytes", max_byte_read);
+    }
 
     let s = serialport::SerialPortSettings {
-        baud_rate: baud,
+        baud_rate: correct_baud_rate,
         data_bits: serialport::DataBits::Eight,
         flow_control: serialport::FlowControl::None,
         parity: serialport::Parity::None,
@@ -123,7 +171,7 @@ fn main() {
                 reserved0: 0,
                 tx_ready: 0,
                 mode: UartMode::new(DataBits::Eight, Parity::None, StopBits::One),
-                baud_rate: baud,
+                baud_rate: correct_baud_rate,
                 in_proto_mask: InProtoMask::all(),
                 out_proto_mask: OutProtoMask::UBLOX,
                 flags: 0,
@@ -187,7 +235,7 @@ fn main() {
                         println!("Time: {:?}", time);
                     }
                 }
-                _ => { }
+                _ => {}
             })
             .unwrap();
     }

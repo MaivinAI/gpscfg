@@ -196,8 +196,8 @@ fn configure_port(baud: u32, port: &str, auto_baud_rate_applied: u32) {
 }
 
 fn main() {
-    let matches = App::new("ublox CLI example program")
-        .about("Demonstrates usage of the Rust ublox API")
+    let matches = App::new("Maivin u-blox configuration tool")
+        .about("Configure and test the gps u-blox device")
         .arg(
             Arg::with_name("port")
                 .short("p")

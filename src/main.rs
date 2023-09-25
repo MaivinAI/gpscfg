@@ -90,11 +90,18 @@ fn try_baud_rate(port_name: &str, baud_rate: u32) -> Result<usize, Box<dyn std::
 
     let mut max_byte_read = 0;
     for _ in 0..NUM_TRIES {
-        let mut serial_port = serialport::open_with_settings(port_name, &settings)?;
-        let mut buffer = vec![0u8; 128];
-        let byte_read = serial_port.read(&mut buffer)?;
-        if byte_read > max_byte_read {
-            max_byte_read = byte_read;
+        match serialport::open_with_settings(port_name, &settings) {
+            Ok(mut port) => {
+                let mut buffer = vec![0u8; 128];
+                let byte_read = port.read(&mut buffer)?;
+                if byte_read > max_byte_read {
+                    max_byte_read = byte_read;
+                }
+            }
+            Err(err) => {
+                eprintln!("Error opening serial port: {}", err);
+                std::process::exit(10);
+            }
         }
     }
 
@@ -115,7 +122,8 @@ fn get_gps_data(device: &mut Device, monitor: bool, status: bool) {
                         {
                             std::process::exit(0);
                         } else {
-                            std::process::exit(-1);
+                            println!("Error: HW/SW version did not match");
+                            std::process::exit(1);
                         }
                     }
                     println!(
@@ -129,7 +137,8 @@ fn get_gps_data(device: &mut Device, monitor: bool, status: bool) {
                         {
                             std::process::exit(0);
                         } else {
-                            std::process::exit(-1);
+                            println!("Error: HW/SW did not match");
+                            std::process::exit(1);
                         }
                     }
                     println!("{:?}", packet);
@@ -160,6 +169,9 @@ fn get_gps_data(device: &mut Device, monitor: bool, status: bool) {
                         println!("Time: {:?}", time);
                     }
                 }
+                PacketRef::NavStatus(sol) => {
+                    println!("{:?}", sol);
+                }
                 _ => {}
             })
             .unwrap();
@@ -175,24 +187,31 @@ fn configure_port(baud: u32, port: &str, auto_baud_rate_applied: u32) {
         stop_bits: serialport::StopBits::One,
         timeout: Duration::from_millis(1),
     };
-    let port = serialport::open_with_settings(port, &s).unwrap();
-    let mut device = Device::new(port);
-    device
-        .write_all(
-            &CfgPrtUartBuilder {
-                portid: UartPortId::Uart1,
-                reserved0: 0,
-                tx_ready: 0,
-                mode: UartMode::new(DataBits::Eight, Parity::None, StopBits::One),
-                baud_rate: baud,
-                in_proto_mask: InProtoMask::all(),
-                out_proto_mask: OutProtoMask::UBLOX,
-                flags: 0,
-                reserved5: 0,
-            }
-            .into_packet_bytes(),
-        )
-        .unwrap();
+    match serialport::open_with_settings(port, &s) {
+        Ok(port) => {
+            let mut device = Device::new(port);
+            device
+                .write_all(
+                    &CfgPrtUartBuilder {
+                        portid: UartPortId::Uart1,
+                        reserved0: 0,
+                        tx_ready: 0,
+                        mode: UartMode::new(DataBits::Eight, Parity::None, StopBits::One),
+                        baud_rate: baud,
+                        in_proto_mask: InProtoMask::all(),
+                        out_proto_mask: OutProtoMask::UBLOX,
+                        flags: 0,
+                        reserved5: 0,
+                    }
+                    .into_packet_bytes(),
+                )
+                .unwrap();
+        }
+        Err(err) => {
+            eprintln!("Error opening serial port: {}", err);
+            std::process::exit(10);
+        }
+    }
 }
 
 fn main() {
@@ -236,7 +255,6 @@ fn main() {
         )
         .get_matches();
 
-    println!("Auto Selecting Baud Rate for GPS...");
     let port = matches.value_of("port").unwrap();
     let baud: u32 = match matches.value_of("baud") {
         Some(val) => {
@@ -248,7 +266,7 @@ fn main() {
                     "Unknown Baud Rate Found! Please choose from {:?}",
                     BAUD_RATES
                 );
-                std::process::exit(-1);
+                std::process::exit(1);
             }
         }
         None => 1,
@@ -275,10 +293,11 @@ fn main() {
         }
     }
     if auto_baud_rate_applied == 0 {
-        if monitor {
-            println!("ERROR No Suitable Baud Rate can be found");
+        if debug {
+            println!("Error: No Suitable Baud Rate can be found");
         } else {
-            std::process::exit(-1);
+            println!("Error: Unable to get a suitable baud rate");
+            std::process::exit(1);
         }
     } else if debug {
         println!(
@@ -293,7 +312,7 @@ fn main() {
     }
 
     if baud_update {
-        if monitor {
+        if monitor || debug {
             println!("Changing baud rate from {auto_baud_rate_applied} to {baud}");
         }
         configure_port(baud, port, auto_baud_rate_applied);
@@ -308,36 +327,52 @@ fn main() {
         stop_bits: serialport::StopBits::One,
         timeout: Duration::from_millis(1),
     };
-    let port = serialport::open_with_settings(port, &s).unwrap();
-    let mut device = Device::new(port);
-    device
-        .write_all(
-            &CfgPrtUartBuilder {
-                portid: UartPortId::Uart1,
-                reserved0: 0,
-                tx_ready: 0,
-                mode: UartMode::new(DataBits::Eight, Parity::None, StopBits::One),
-                baud_rate: auto_baud_rate_applied,
-                in_proto_mask: InProtoMask::all(),
-                out_proto_mask: OutProtoMask::UBLOX,
-                flags: 0,
-                reserved5: 0,
-            }
-            .into_packet_bytes(),
-        )
-        .unwrap();
-    device.wait_for_ack::<CfgPrtUart>().unwrap();
-    device
-        .write_all(
-            &CfgMsgAllPortsBuilder::set_rate_for::<NavPosVelTime>([0, 1, 0, 0, 0, 0])
-                .into_packet_bytes(),
-        )
-        .unwrap();
-    device.wait_for_ack::<CfgMsgAllPorts>().unwrap();
+    match serialport::open_with_settings(port, &s) {
+        Ok(port) => {
+            let mut device = Device::new(port);
+            device
+                .write_all(
+                    &CfgPrtUartBuilder {
+                        portid: UartPortId::Uart1,
+                        reserved0: 0,
+                        tx_ready: 0,
+                        mode: UartMode::new(DataBits::Eight, Parity::None, StopBits::One),
+                        baud_rate: auto_baud_rate_applied,
+                        in_proto_mask: InProtoMask::all(),
+                        out_proto_mask: OutProtoMask::UBLOX,
+                        flags: 0,
+                        reserved5: 0,
+                    }
+                    .into_packet_bytes(),
+                )
+                .unwrap();
+            device.wait_for_ack::<CfgPrtUart>().unwrap();
+            device
+                .write_all(
+                    &CfgMsgAllPortsBuilder::set_rate_for::<NavPosVelTime>([0, 1, 0, 0, 0, 0])
+                        .into_packet_bytes(),
+                )
+                .unwrap();
+            device.wait_for_ack::<CfgMsgAllPorts>().unwrap();
 
-    // Send a packet request for the MonVer packet
-    device
-        .write_all(&UbxPacketRequest::request_for::<MonVer>().into_packet_bytes())
-        .unwrap();
-    get_gps_data(&mut device, monitor, status);
+            device
+                .write_all(
+                    &CfgMsgAllPortsBuilder::set_rate_for::<NavStatus>([0, 1, 0, 0, 0, 0])
+                        .into_packet_bytes(),
+                )
+                .unwrap();
+            device.wait_for_ack::<CfgMsgAllPorts>().unwrap();
+
+            // Send a packet request for the MonVer packet
+            device
+                .write_all(&UbxPacketRequest::request_for::<MonVer>().into_packet_bytes())
+                .unwrap();
+            get_gps_data(&mut device, monitor, status);
+        }
+
+        Err(err) => {
+            eprintln!("Error opening serial port: {}", err);
+            std::process::exit(10);
+        }
+    }
 }

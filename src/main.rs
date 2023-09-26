@@ -143,7 +143,7 @@ fn get_gps_data(device: &mut Device, monitor: bool, status: bool) {
                     }
                     println!("{:?}", packet);
                 }
-                PacketRef::NavPosVelTime(sol) => {
+                PacketRef::NavPvt(sol) => {
                     let has_time = sol.fix_type() == GpsFix::Fix3D
                         || sol.fix_type() == GpsFix::GPSPlusDeadReckoning
                         || sol.fix_type() == GpsFix::TimeOnlyFix;
@@ -349,7 +349,7 @@ fn main() {
             device.wait_for_ack::<CfgPrtUart>().unwrap();
             device
                 .write_all(
-                    &CfgMsgAllPortsBuilder::set_rate_for::<NavPosVelTime>([0, 1, 0, 0, 0, 0])
+                    &CfgMsgAllPortsBuilder::set_rate_for::<NavPvt>([0, 1, 0, 0, 0, 0])
                         .into_packet_bytes(),
                 )
                 .unwrap();
